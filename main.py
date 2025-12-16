@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from datetime import datetime
 from sort import Sort
+from kalman_tracker import KalmanBoxTracker, NSAKalmanTracker, IOUTracker
 
 
 def load_detections(det_file, min_score=0.1):
@@ -157,8 +158,38 @@ def draw_boxes(img, detections, tracks, trackers, frame_id):
     return img_draw
 
 
+def save_results(output_file, results):
+    """
+    将跟踪结果保存为标准MOT格式的txt文件
+    
+    Args:
+        output_file: 输出文件路径
+        results: 跟踪结果列表，每个元素为 [frame_id, track_id, x, y, w, h]
+    
+    输出格式（标准MOT格式）:
+        frame_id, track_id, x, y, w, h, 1, -1, -1, -1
+    """
+    # 按帧号和track_id排序
+    results_sorted = sorted(results, key=lambda x: (x[0], x[1]))
+    
+    with open(output_file, 'w') as f:
+        for result in results_sorted:
+            frame_id, track_id, x, y, w, h = result
+            # 标准MOT格式: frame_id, track_id, x, y, w, h, 1, -1, -1, -1
+            line = f"{int(frame_id)},{int(track_id)},{x:.2f},{y:.2f},{w:.2f},{h:.2f},1,-1,-1,-1\n"
+            f.write(line)
+    
+    print(f"跟踪结果已保存到: {output_file}")
+    print(f"共保存 {len(results_sorted)} 条跟踪记录")
+
+
 def main():
     """主函数"""
+    # ========== 实验配置：选择跟踪模式 ==========
+    # 可选值: 'Baseline', 'Standard', 'NSA'
+    EXPERIMENT_MODE = 'Standard'
+    # ============================================
+    
     # 硬编码数据路径
     sequence_dir = "./MOT16/train/MOT16-04"
     
@@ -191,18 +222,35 @@ def main():
     # 图像目录
     img_dir = os.path.join(sequence_dir, seq_info['imDir'])
     
-    # 初始化SORT跟踪器
-    mot_tracker = Sort(max_age=60, min_hits=3, iou_threshold=0.3)
+    # 根据实验模式选择跟踪器类型
+    if EXPERIMENT_MODE == 'Baseline':
+        tracker_class = IOUTracker
+        tracker_name = "Baseline"
+        print("使用 IOUTracker (Baseline: 无卡尔曼滤波)")
+    elif EXPERIMENT_MODE == 'NSA':
+        tracker_class = NSAKalmanTracker
+        tracker_name = "NSA"
+        print("使用 NSAKalmanTracker (自适应噪声跟踪器)")
+    else:  # 'Standard'
+        tracker_class = KalmanBoxTracker
+        tracker_name = "Standard"
+        print("使用 KalmanBoxTracker (标准跟踪器)")
+    
+    # 初始化SORT跟踪器（传入跟踪器类）
+    mot_tracker = Sort(max_age=60, min_hits=3, iou_threshold=0.3, tracker_class=tracker_class)
     
     # 创建输出目录
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
     
-    # 使用时间戳生成唯一的视频文件名
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_video_path = os.path.join(output_dir, f"MOT16-04_result_{timestamp}.mp4")
+    # 根据跟踪器类型生成带后缀的文件名
+    output_video_path = os.path.join(output_dir, f"MOT16-04_result_{tracker_name}.mp4")
+    output_result_path = os.path.join(output_dir, f"res_{tracker_name}.txt")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 使用mp4v编码器
     out = None
+    
+    # 用于收集跟踪结果的列表
+    tracking_results = []
     
     # 主循环：按帧处理
     print("\n开始处理视频序列...")
@@ -228,6 +276,12 @@ def main():
             tracks = mot_tracker.update(frame_dets)  # 传递完整的 (N, 5) 数组
         else:
             tracks = mot_tracker.update(np.empty((0, 5)))
+        
+        # 收集跟踪结果（用于保存到txt文件）
+        if len(tracks) > 0:
+            for track in tracks:
+                x, y, w, h, track_id = track[0], track[1], track[2], track[3], track[4]
+                tracking_results.append([frame_id, track_id, x, y, w, h])
         
         # 获取跟踪器列表用于绘制轨迹
         trackers = mot_tracker.get_trackers()
@@ -257,6 +311,9 @@ def main():
     if out is not None:
         out.release()
         print(f"\n视频已保存到: {output_video_path}")
+    
+    # 保存跟踪结果到txt文件（标准MOT格式）
+    save_results(output_result_path, tracking_results)
     
     print("处理完成！")
 

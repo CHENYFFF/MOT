@@ -15,7 +15,7 @@ class Sort:
     使用Kalman滤波器进行状态预测，使用匈牙利算法进行数据关联
     """
     
-    def __init__(self, max_age=1, min_hits=3, iou_threshold=0.3):
+    def __init__(self, max_age=1, min_hits=3, iou_threshold=0.3, tracker_class=None):
         """
         初始化SORT跟踪器
         
@@ -23,12 +23,19 @@ class Sort:
             max_age: 目标丢失多少帧后删除跟踪器
             min_hits: 目标需要连续命中多少次才显示（用于过滤初始不稳定跟踪）
             iou_threshold: IoU匹配阈值，低于此值不进行匹配
+            tracker_class: 跟踪器类，默认为 KalmanBoxTracker（支持依赖注入）
         """
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.trackers = []  # 当前活跃的跟踪器列表
         self.frame_count = 0  # 帧计数器
+        
+        # 支持依赖注入：如果没有传入 tracker_class，则使用默认的 KalmanBoxTracker
+        if tracker_class is None:
+            self.tracker_class = KalmanBoxTracker
+        else:
+            self.tracker_class = tracker_class
     
     def update(self, dets):
         """
@@ -119,7 +126,7 @@ class Sort:
         
         # 处理未匹配的检测框 - 创建新跟踪器（传递完整的 [x, y, w, h, score]）
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i])  # 传递完整的检测框，包含score
+            trk = self.tracker_class(dets[i])  # 使用注入的跟踪器类创建新跟踪器
             self.trackers.append(trk)
         
         # 处理未匹配的跟踪器 - 增加丢失计数

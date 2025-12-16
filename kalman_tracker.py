@@ -171,3 +171,115 @@ class KalmanBoxTracker:
         y = center_y - h / 2.0
         
         return np.array([x, y, w, h])
+
+
+class IOUTracker:
+    """
+    Baseline跟踪器：不使用卡尔曼滤波，仅基于IoU匹配
+    
+    目的：用来证明没有卡尔曼预测时，高速运动或遮挡时的效果有多差
+    """
+    
+    count = 0  # 静态变量，用于分配唯一ID
+    
+    def __init__(self, bbox):
+        """
+        初始化IOU跟踪器
+        
+        Args:
+            bbox: 初始边界框，格式为 [x, y, w, h] 或 [x, y, w, h, score]
+        """
+        # 只保存边界框（不使用卡尔曼滤波）
+        self.bbox = np.array(bbox[:4], dtype=np.float32)  # [x, y, w, h]
+        
+        # 分配唯一ID
+        self.id = IOUTracker.count
+        IOUTracker.count += 1
+        
+        # 跟踪状态（与KalmanBoxTracker保持接口一致）
+        self.time_since_update = 0  # 自上次更新以来的帧数
+        self.hit_streak = 0  # 连续命中次数
+        self.history = []  # 历史状态（存储中心点坐标用于绘制轨迹）
+        self.age = 0  # 跟踪器年龄（总帧数）
+    
+    def update(self, bbox):
+        """
+        更新边界框（直接使用检测框，不做预测）
+        
+        Args:
+            bbox: 观测到的边界框，格式为 [x, y, w, h] 或 [x, y, w, h, score]
+        """
+        self.time_since_update = 0
+        self.hit_streak += 1
+        
+        # 直接更新边界框（假设物体静止，不做预测）
+        self.bbox = np.array(bbox[:4], dtype=np.float32)
+        
+        # 记录中心点用于绘制轨迹
+        center_x = self.bbox[0] + self.bbox[2] / 2.0
+        center_y = self.bbox[1] + self.bbox[3] / 2.0
+        self.history.append((center_x, center_y))
+    
+    def predict(self):
+        """
+        预测下一帧位置（Baseline：假设物体静止，直接返回当前边界框）
+        
+        Returns:
+            预测的边界框，格式为 [x, y, w, h]
+        """
+        self.age += 1
+        
+        if self.time_since_update > 0:
+            self.hit_streak = 0
+        
+        self.time_since_update += 1
+        
+        # 记录中心点用于绘制轨迹
+        center_x = self.bbox[0] + self.bbox[2] / 2.0
+        center_y = self.bbox[1] + self.bbox[3] / 2.0
+        self.history.append((center_x, center_y))
+        
+        # 直接返回当前边界框（不做预测）
+        return self.bbox.copy()
+    
+    def get_state(self):
+        """
+        获取当前边界框状态
+        
+        Returns:
+            边界框，格式为 [x, y, w, h]（一维数组）
+        """
+        return self.bbox.copy()
+
+
+class NSAKalmanTracker(KalmanBoxTracker):
+    """
+    继承自标准跟踪器，仅重写 update 方法以实现 NSA (Noise Scale Adaptive) 逻辑
+    
+    核心创新：根据检测框的置信度动态调整观测噪声协方差矩阵 R
+    - 置信度越低，R 越大（越不相信观测值）
+    - 置信度越高，R 越小（越相信观测值）
+    """
+    
+    def update(self, bbox):
+        """
+        重写 update 方法，实现自适应噪声调整
+        
+        Args:
+            bbox: 观测到的边界框，格式为 [x, y, w, h] 或 [x, y, w, h, score]
+        """
+        # 1. 保存原始 R 矩阵 (如果是第一次调用)
+        if not hasattr(self, 'original_R'):
+            self.original_R = self.kf.R.copy()
+            
+        # 2. 获取 score (bbox[4])
+        score = bbox[4] if len(bbox) > 4 else 1.0
+        
+        # 3. 动态调整 R (创新点核心)
+        # 逻辑：置信度越低，R 越大 (越不信观测)
+        # alpha 范围: score=1.0时alpha=0, score=0.0时alpha=10.0
+        alpha = 10.0 * (1.0 - score)
+        self.kf.R = self.original_R * (1.0 + alpha)
+        
+        # 4. 调用父类的 update 完成常规更新
+        super().update(bbox)
