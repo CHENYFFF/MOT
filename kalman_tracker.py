@@ -117,7 +117,9 @@ class KalmanBoxTracker:
         z = np.array([center_x, center_y, s, r])
         self.kf.update(z)
         
-        # 注意：历史记录在predict()中累积，这里不重复添加
+        # 将当前观测的中心点添加到历史记录中（用于绘制轨迹）
+        # 注意：不要清空history，保持轨迹连续性
+        self.history.append((center_x, center_y))
     
     def predict(self):
         """

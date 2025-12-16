@@ -5,15 +5,17 @@ SORT多目标跟踪系统主程序
 import os
 import cv2
 import numpy as np
+from datetime import datetime
 from sort import Sort
 
 
-def load_detections(det_file):
+def load_detections(det_file, min_score=0.1):
     """
-    加载检测结果文件
+    加载检测结果文件（归一化后的分数，范围0~1）
     
     Args:
-        det_file: 检测文件路径，格式为 MOT16 det.txt
+        det_file: 检测文件路径，格式为 MOT16 det_norm.txt（已归一化的检测文件）
+        min_score: 最小置信度阈值，低于此值的检测框将被过滤
     
     Returns:
         dict: 键为帧号，值为该帧的检测框列表，每个检测框为 [x, y, w, h, score]
@@ -23,6 +25,9 @@ def load_detections(det_file):
     if not os.path.exists(det_file):
         print(f"错误：检测文件不存在: {det_file}")
         return detections
+    
+    filtered_count = 0
+    total_count = 0
     
     with open(det_file, 'r') as f:
         for line in f:
@@ -35,18 +40,25 @@ def load_detections(det_file):
             if len(parts) < 7:
                 continue
             
+            total_count += 1
             frame_id = int(float(parts[0]))
             x = float(parts[2])
             y = float(parts[3])
             w = float(parts[4])
             h = float(parts[5])
-            score = float(parts[6])
+            score = float(parts[6])  # 第7列（索引6）是归一化后的置信度score（范围0~1）
             
-            # 不过滤低置信度检测，保留所有检测框
+            # 过滤低置信度检测框，减少噪音干扰
+            if score < min_score:
+                filtered_count += 1
+                continue
+            
             if frame_id not in detections:
                 detections[frame_id] = []
             
             detections[frame_id].append([x, y, w, h, score])
+    
+    print(f"检测框统计: 总计 {total_count} 个，过滤 {filtered_count} 个低置信度框，保留 {total_count - filtered_count} 个")
     
     # 转换为numpy数组，确保形状为 (N, 5)
     for frame_id in detections:
@@ -96,26 +108,28 @@ def draw_boxes(img, detections, tracks, trackers, frame_id):
                 colors[track_id] = tuple(map(int, color))
     
     # 绘制轨迹（在绘制跟踪框之前，这样轨迹在底层）
-    if trackers is not None:
-        for trk in trackers:
-            if trk.time_since_update < 1 and len(trk.history) > 1:  # 只绘制活跃跟踪器的轨迹
-                track_id = trk.id + 1
-                if track_id in colors:
-                    color = colors[track_id]
-                    
-                    # 将历史中心点转换为整数坐标
-                    points = np.array(trk.history, dtype=np.int32)
-                    
-                    # 限制轨迹长度，只显示最近的部分（例如最近30个点）
-                    max_trail_length = 30
-                    if len(points) > max_trail_length:
-                        points = points[-max_trail_length:]
-                    
-                    # 使用polylines绘制轨迹
-                    if len(points) >= 2:
-                        # 将点转换为 (N, 1, 2) 格式
-                        points = points.reshape((-1, 1, 2))
-                        cv2.polylines(img_draw, [points], False, color, 2)
+    # 已注释：不显示轨迹
+    # if trackers is not None:
+    #     for trk in trackers:
+    #         if trk.time_since_update < 1 and len(trk.history) > 1:  # 只绘制活跃跟踪器的轨迹
+    #             track_id = trk.id + 1
+    #             if track_id in colors:
+    #                 color = colors[track_id]
+    #                 
+    #                 # 将历史中心点转换为整数坐标
+    #                 points = np.array(trk.history, dtype=np.int32)
+    #                 
+    #                 # 限制轨迹长度，只显示最近的部分（例如最近50个点，显示更长轨迹）
+    #                 max_trail_length = 150
+    #                 if len(points) > max_trail_length:
+    #                     points = points[-max_trail_length:]
+    #                 
+    #                 # 使用polylines绘制轨迹，使用更粗的线条和更鲜艳的颜色
+    #                 if len(points) >= 2:
+    #                     # 将点转换为 (N, 1, 2) 格式
+    #                     points = points.reshape((-1, 1, 2))
+    #                     # 增加线条粗细，使轨迹更明显（thickness=3）
+    #                     cv2.polylines(img_draw, [points], False, color, 3)
     
     # 绘制跟踪框（彩色粗线 + ID）
     if tracks is not None and len(tracks) > 0:
@@ -169,8 +183,8 @@ def main():
     print(f"总帧数: {seq_info['seqLength']}")
     print(f"图像尺寸: {seq_info['imWidth']}x{seq_info['imHeight']}")
     
-    # 加载检测结果
-    det_file = os.path.join(sequence_dir, "det", "det.txt")
+    # 加载检测结果（使用归一化后的检测文件）
+    det_file = os.path.join(sequence_dir, "det", "det_norm.txt")
     detections = load_detections(det_file)
     print(f"加载了 {len(detections)} 帧的检测结果")
     
@@ -178,14 +192,15 @@ def main():
     img_dir = os.path.join(sequence_dir, seq_info['imDir'])
     
     # 初始化SORT跟踪器
-    mot_tracker = Sort(max_age=30, min_hits=3, iou_threshold=0.3)
+    mot_tracker = Sort(max_age=60, min_hits=3, iou_threshold=0.3)
     
     # 创建输出目录
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
     
-    # 创建视频写入器
-    output_video_path = os.path.join(output_dir, "MOT16-04_result.mp4")
+    # 使用时间戳生成唯一的视频文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_video_path = os.path.join(output_dir, f"MOT16-04_result_{timestamp}.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 使用mp4v编码器
     out = None
     
@@ -234,12 +249,6 @@ def main():
         # 写入视频
         out.write(img_result)
         
-        # 显示结果（可选）
-        cv2.imshow('SORT Tracking', img_result)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("用户中断处理")
-            break
-        
         # 打印进度
         if frame_id % 50 == 0:
             print(f"处理进度: {frame_id}/{seq_info['seqLength']} 帧")
@@ -249,7 +258,6 @@ def main():
         out.release()
         print(f"\n视频已保存到: {output_video_path}")
     
-    cv2.destroyAllWindows()
     print("处理完成！")
 
 
