@@ -1,0 +1,12 @@
+# 忽略数据集
+MOT16/
+output/
+
+# 忽略虚拟环境
+venv/
+mot-env/
+__pycache__/
+
+# 忽略IDE配置
+.vscode/
+.idea/
