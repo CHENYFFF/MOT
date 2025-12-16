@@ -10,7 +10,7 @@ from sort import Sort
 from kalman_tracker import KalmanBoxTracker, NSAKalmanTracker, IOUTracker
 
 
-def load_detections(det_file, min_score=0.1):
+def load_detections(det_file, min_score=0.05):
     """
     加载检测结果文件（归一化后的分数，范围0~1）
     
@@ -187,7 +187,9 @@ def main():
     """主函数"""
     # ========== 实验配置：选择跟踪模式 ==========
     # 可选值: 'Baseline', 'Standard', 'NSA'
-    EXPERIMENT_MODE = 'Standard'
+    # EXPERIMENT_MODE = 'Baseline'
+    # EXPERIMENT_MODE = 'Standard'
+    EXPERIMENT_MODE = 'NSA'
     # ============================================
     
     # 硬编码数据路径
